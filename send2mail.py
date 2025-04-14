@@ -1,3 +1,18 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Модуль для отправки электронных писем с вложениями через SMTP сервер.
+
+Основные функции:
+- Отправка писем с одним или несколькими вложениями
+- Поддержка текста письма из аргументов или файла
+- Автогенерация текста письма со списком вложений
+- Поддержка SMTP аутентификации
+- Поддержка SSL/TLS соединения
+- Логирование операций
+"""
+
 import sys
 import os
 import argparse
@@ -12,41 +27,45 @@ from typing import Optional, List, Tuple
 
 
 # Константы
-ADMIN_MAIL = "noreply@example.com"
-DEFAULT_LOGFILE = "send2mail.log"
+ADMIN_MAIL = "noreply@example.com"  # Адрес отправителя по умолчанию
+DEFAULT_LOGFILE = "send2mail.log"  # Файл логов по умолчанию
 
 # Коды возврата
-EXIT_SUCCESS = 0
-EXIT_ARGUMENT_ERROR = 1
-EXIT_FILE_NOT_FOUND = 2
-EXIT_FILE_READ_ERROR = 3
-EXIT_ATTACHMENT_ERROR = 4
-EXIT_SMTP_CONNECTION_ERROR = 5
-EXIT_SMTP_AUTH_ERROR = 6
-EXIT_SMTP_SEND_ERROR = 7
-EXIT_INVALID_EMAIL = 8
-EXIT_NO_FILES = 9
-EXIT_UNKNOWN_ERROR = 99
+EXIT_SUCCESS = 0  # Успешное выполнение
+EXIT_ARGUMENT_ERROR = 1  # Ошибка в аргументах командной строки
+EXIT_FILE_NOT_FOUND = 2  # Файл не найден
+EXIT_FILE_READ_ERROR = 3  # Ошибка чтения файла
+EXIT_ATTACHMENT_ERROR = 4  # Ошибка прикрепления файлов
+EXIT_SMTP_CONNECTION_ERROR = 5  # Ошибка подключения к SMTP серверу
+EXIT_SMTP_AUTH_ERROR = 6  # Ошибка аутентификации на SMTP сервере
+EXIT_SMTP_SEND_ERROR = 7  # Ошибка отправки письма
+EXIT_INVALID_EMAIL = 8  # Невалидный email адрес
+EXIT_NO_FILES = 9  # Не указаны файлы для отправки
+EXIT_UNKNOWN_ERROR = 99  # Неизвестная ошибка
 
 
 # Пользовательские исключения
 class EmailSenderError(Exception):
-    """Базовое исключение для ошибок отправки email"""
+    """Базовое исключение для ошибок отправки email."""
+
     pass
 
 
 class FileReadError(EmailSenderError):
-    """Ошибка чтения файла"""
+    """Ошибка чтения файла (вложения или текста письма)."""
+
     pass
 
 
 class AuthError(EmailSenderError):
-    """Ошибка аутентификации"""
+    """Ошибка аутентификации на SMTP сервере."""
+
     pass
 
 
 class SMTPError(EmailSenderError):
-    """Ошибка SMTP"""
+    """Ошибка взаимодействия с SMTP сервером."""
+
     pass
 
 
@@ -55,13 +74,38 @@ logger = logging.getLogger()
 
 
 def validate_email(email: str) -> bool:
-    """Проверяет валидность email адреса."""
+    """
+    Проверяет валидность email адреса с помощью регулярного выражения.
+
+    Args:
+        email (str): Email адрес для проверки
+
+    Returns:
+        bool: True если email валиден, False в противном случае
+
+    Examples:
+        >>> validate_email("test@example.com")
+        True
+        >>> validate_email("invalid.email")
+        False
+    """
     pattern = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9].+$"
     return re.match(pattern, email) is not None
 
 
 def validate_file_path(file_path: Path) -> bool:
-    """Проверяет существование файла и доступность для чтения."""
+    """
+    Проверяет существование файла и доступность для чтения.
+
+    Args:
+        file_path (Path): Путь к файлу для проверки
+
+    Returns:
+        bool: True если файл существует и доступен для чтения
+
+    Note:
+        Записывает сообщения об ошибках в лог при обнаружении проблем
+    """
     if not file_path.exists():
         logging.error(f"Файл не существует: {file_path}")
         return False
@@ -75,7 +119,18 @@ def validate_file_path(file_path: Path) -> bool:
 
 
 def read_text_file(file_path: Path) -> str:
-    """Чтение текста письма из файла."""
+    """
+    Читает содержимое текстового файла в кодировке UTF-8.
+
+    Args:
+        file_path (Path): Путь к файлу для чтения
+
+    Returns:
+        str: Содержимое файла
+
+    Raises:
+        FileReadError: Если произошла ошибка при чтении файла
+    """
     try:
         with file_path.open("r", encoding="utf-8") as f:
             content = f.read()
@@ -87,7 +142,19 @@ def read_text_file(file_path: Path) -> str:
 
 
 def add_signature(body: str, sender: Optional[str] = None) -> str:
-    """Добавляет подпись к тексту письма."""
+    """
+    Добавляет стандартную подпись к тексту письма.
+
+    Args:
+        body (str): Основной текст письма
+        sender (str, optional): Email отправителя для включения в подпись
+
+    Returns:
+        str: Текст письма с добавленной подписью
+
+    Note:
+        Если sender не указан, используется ADMIN_MAIL
+    """
     signature = "\n\nЭто письмо отправлено автоматически. Отвечать на него не нужно."
 
     if sender:
@@ -101,7 +168,24 @@ def add_signature(body: str, sender: Optional[str] = None) -> str:
 def create_message(
     sender: str, recipient: str, subject: str, body: str
 ) -> MIMEMultipart:
-    """Создает объект письма с указанными параметрами."""
+    """
+    Создает MIME сообщение с указанными параметрами.
+
+    Args:
+        sender (str): Email отправителя
+        recipient (str): Email получателя
+        subject (str): Тема письма
+        body (str): Текст письма
+
+    Returns:
+        MIMEMultipart: Сформированное MIME сообщение
+
+    Raises:
+        EmailSenderError: Если произошла ошибка при создании сообщения
+
+    Note:
+        Текст письма кодируется в UTF-8
+    """
     try:
         message = MIMEMultipart()
         message["From"] = sender
@@ -116,7 +200,20 @@ def create_message(
 
 
 def attach_files(message: MIMEMultipart, file_paths: List[Path]) -> bool:
-    """Добавляет вложения к письму."""
+    """
+    Добавляет вложения к MIME сообщению.
+
+    Args:
+        message (MIMEMultipart): MIME сообщение
+        file_paths (List[Path]): Список путей к файлам для вложения
+
+    Returns:
+        bool: True если все файлы успешно добавлены, False если были ошибки
+
+    Note:
+        Продолжает обработку даже при ошибках с отдельными файлами
+        Логирует успешные и неудачные попытки добавления вложений
+    """
     success = True
     for file_path in file_paths:
         try:
@@ -142,12 +239,31 @@ def send_email(
     auth: Optional[str] = None,
     auth_file: Optional[argparse.FileType] = None,
 ) -> int:
-    """Отправляет письмо через SMTP сервер.
-    Возвращает код ошибки или EXIT_SUCCESS при успехе."""
+    """
+    Отправляет письмо через SMTP сервер.
+
+    Args:
+        server (str): Адрес SMTP сервера
+        port (int): Порт SMTP сервера
+        sender (str): Email отправителя
+        recipient (str): Email получателя
+        message (MIMEMultipart): Сформированное MIME сообщение
+        use_ssl (bool): Использовать SSL/TLS соединение
+        auth (str, optional): Данные аутентификации в формате "логин:пароль"
+        auth_file (file, optional): Файл с данными аутентификации
+
+    Returns:
+        int: Код возврата (EXIT_SUCCESS при успешной отправке)
+
+    Note:
+        Поддерживает как SSL так и обычное соединение
+        Обрабатывает различные ошибки SMTP и возвращает соответствующие коды
+        Всегда закрывает соединение с сервером при завершении
+    """
     smtp_server = None
     try:
         logger.info(f"Подключение к SMTP серверу {server}:{port} (SSL: {use_ssl})")
-        timeout_seconds = 5  # Таймаут в секундах
+        timeout_seconds = 5  # Таймаут соединения в секундах
         if use_ssl:
             smtp_server = smtplib.SMTP_SSL(server, port, timeout=timeout_seconds)
         else:
@@ -198,7 +314,21 @@ def send_email(
 
 
 def read_auth_from_file(auth_file):
-    """Читает данные авторизации из файла"""
+    """
+    Читает данные аутентификации из файла.
+
+    Args:
+        auth_file (file): Открытый файловый объект
+
+    Returns:
+        tuple: (username, password)
+
+    Raises:
+        AuthError: Если формат данных неверный или произошла ошибка чтения
+
+    Note:
+        Закрывает файл после чтения
+    """
     try:
         data = auth_file.read().strip()
         username, password = data.split(":")
@@ -219,7 +349,16 @@ def read_auth_from_file(auth_file):
 def generate_default_email_body(
     file_paths: List[Path], sender: Optional[str] = None
 ) -> str:
-    """Генерирует текст письма по умолчанию."""
+    """
+    Генерирует стандартный текст письма со списком вложений.
+
+    Args:
+        file_paths (List[Path]): Список путей к прикрепленным файлам
+        sender (str, optional): Email отправителя для подписи
+
+    Returns:
+        str: Сгенерированный текст письма с подписью
+    """
     body = "Вам отправлены файлы:\n" + "\n".join(
         f"{i+1}. {f.name}" for i, f in enumerate(file_paths)
     )
@@ -227,7 +366,24 @@ def generate_default_email_body(
 
 
 def get_email_body(args: argparse.Namespace, file_paths: List[Path]) -> str:
-    """Определяет текст письма согласно приоритетам."""
+    """
+    Определяет текст письма согласно приоритетам источников.
+
+    Приоритеты:
+    1. Текст из файла (--text-file)
+    2. Текст из аргумента (--text)
+    3. Автогенерированный текст со списком файлов
+
+    Args:
+        args (argparse.Namespace): Аргументы командной строки
+        file_paths (List[Path]): Список путей к файлам
+
+    Returns:
+        str: Текст письма с подписью
+
+    Note:
+        Логирует используемый источник текста письма
+    """
     if args.text_file:
         try:
             body = read_text_file(args.text_file)
@@ -248,8 +404,20 @@ def get_email_body(args: argparse.Namespace, file_paths: List[Path]) -> str:
 def parse_file_paths(
     file_paths_str: str, files_list_path: Optional[Path] = None
 ) -> Tuple[List[Path], int]:
-    """Разбирает пути к файлам из строки или из файла со списком.
-    Возвращает кортеж (список файлов, код ошибки)"""
+    """
+    Разбирает пути к файлам из строки или файла со списком.
+
+    Args:
+        file_paths_str (str): Строка с путями к файлам через запятую
+        files_list_path (Path, optional): Путь к файлу со списком файлов
+
+    Returns:
+        Tuple[List[Path], int]: Кортеж (список файлов, код ошибки)
+
+    Note:
+        Проверяет существование и доступность каждого файла
+        Возвращает код ошибки если файлы не найдены или недоступны
+    """
     file_paths = []
 
     if files_list_path:
@@ -299,7 +467,16 @@ def parse_file_paths(
 
 
 def setup_logging(log_file: Optional[str] = None) -> None:
-    """Настраивает логирование."""
+    """
+    Настраивает систему логирования.
+
+    Args:
+        log_file (str, optional): Путь к файлу логов. Если None - логи только в консоль
+
+    Note:
+        Если log_file не указан, но параметр --log передан без значения,
+        используется DEFAULT_LOGFILE
+    """
     handlers = [logging.StreamHandler()]
 
     if log_file is not None:  # Если параметр --log был передан (даже без значения)
@@ -319,7 +496,15 @@ def setup_logging(log_file: Optional[str] = None) -> None:
 
 
 def setup_arg_parser() -> argparse.ArgumentParser:
-    """Настраивает парсер аргументов командной строки."""
+    """
+    Создает и настраивает парсер аргументов командной строки.
+
+    Returns:
+        argparse.ArgumentParser: Настроенный парсер аргументов
+
+    Note:
+        Включает подробное описание всех параметров и кодов возврата
+    """
     return_codes_help = """
 Коды возврата:
   {EXIT_SUCCESS} - Успешное выполнение
@@ -367,7 +552,14 @@ def setup_arg_parser() -> argparse.ArgumentParser:
         "-p", "--port", required=True, type=int, help="Порт SMTP сервера"
     )
     parser.add_argument("-t", "--to", required=True, help="Email получателя")
-    parser.add_argument("-f", "--from", dest="sender", nargs="?",const=ADMIN_MAIL help="Email отправителя")
+    parser.add_argument(
+        "-f",
+        "--from",
+        dest="sender",
+        nargs="?",
+        const=ADMIN_MAIL,
+        help="Email отправителя (по умолчанию: {ADMIN_MAIL})",
+    )
     parser.add_argument(
         "-j", "--subject", default="Письмо с вложениями", help="Тема письма"
     )
@@ -394,7 +586,16 @@ def setup_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    """Основная функция выполнения скрипта."""
+    """
+    Основная функция выполнения скрипта.
+
+    Returns:
+        int: Код возврата (EXIT_SUCCESS при успешном выполнении)
+
+    Note:
+        Обрабатывает все исключения и возвращает соответствующие коды ошибок
+        Логирует все этапы выполнения и ошибки
+    """
     try:
         parser = setup_arg_parser()
         args = parser.parse_args()
