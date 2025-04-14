@@ -61,14 +61,14 @@ python send2mail.py -s SMTP_СЕРВЕР -p ПОРТ -t ПОЛУЧАТЕЛЬ -a 
 
 | Опция | Описание |
 |-------|----------|
-| `-f`, `--from` | Email отправителя (по умолчанию: admin@example.com) |
+| `-f`, `--from` | Email отправителя (по умолчанию: admin@example.com), изменяется в константе ADMIN_MAIL |
 | `-j`, `--subject` | Тема письма (по умолчанию: "Письмо с вложениями") |
 | `-b`, `--text` | Текст письма |
 | `-bf`, `--text-file` | Файл с текстом письма |
 | `-u`, `--auth` | Данные аутентификации в формате "логин:пароль" |
 | `-uf`, `--auth-file` | Файл с данными аутентификации (логин:пароль) |
 | `-S`, `--ssl` | Использовать SSL |
-| `-l`, `--log` | Сохранять логи в файл (по умолчанию: send2mail.log) |
+| `-l`, `--log` | Сохранять логи в файл (по умолчанию: send2mail.log) изменяется в константе DEFAULT_LOGFILE |
 
 ### Примеры использования
 
@@ -84,12 +84,20 @@ python send2mail.py -s SMTP_СЕРВЕР -p ПОРТ -t ПОЛУЧАТЕЛЬ -a 
 
 3. Отправка с аутентификацией и SSL:
    ```bash
+   :: передача данных авторизации в командной строке
    python send2mail.py -s smtp.gmail.com -p 465 -t recipient@example.com -a report.pdf -u username:password -S
+
+   :: передача данных авторизации в файле auth.txt
+   python send2mail.py -s smtp.gmail.com -p 465 -t recipient@example.com -a report.pdf -uf auth.txt -S
+
+   :: содержимое файла auth.txt
+   username
+   password
    ```
 
 4. Использование файла со списком вложений и файла с текстом:
    ```bash
-   python send2mail.py -s smtp.example.com -p 25 -t recipient@example.com --files-list files.txt --text-file message.txt
+   python send2mail.py -s smtp.example.com -p 25 -t recipient@example.com --files-list files.txt --text-file message.txt 
    ```
 
 5. Сохранение логов в указанный файл:
