@@ -8,11 +8,12 @@ from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from pathlib import Path
 import re
-from typing import Optional, List
+from typing import Optional, List, Tuple
+
 
 # Константы
-ADMIN_MAIL = "admin@example.com"
-LOGFILE = "email_sender.log"
+ADMIN_MAIL = "noreply@example.com"
+DEFAULT_LOGFILE = "send2mail.log"
 
 # Коды возврата
 EXIT_SUCCESS = 0
@@ -27,31 +28,48 @@ EXIT_INVALID_EMAIL = 8
 EXIT_NO_FILES = 9
 EXIT_UNKNOWN_ERROR = 99
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler(LOGFILE), logging.StreamHandler()],
-)
-logger = logging.getLogger(__name__)
+
+# Пользовательские исключения
+class EmailSenderError(Exception):
+    """Базовое исключение для ошибок отправки email"""
+    pass
+
+
+class FileReadError(EmailSenderError):
+    """Ошибка чтения файла"""
+    pass
+
+
+class AuthError(EmailSenderError):
+    """Ошибка аутентификации"""
+    pass
+
+
+class SMTPError(EmailSenderError):
+    """Ошибка SMTP"""
+    pass
+
+
+# Глобальная переменная для логгера
+logger = logging.getLogger()
 
 
 def validate_email(email: str) -> bool:
     """Проверяет валидность email адреса."""
-    pattern = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+    pattern = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9].+$"
     return re.match(pattern, email) is not None
 
 
 def validate_file_path(file_path: Path) -> bool:
     """Проверяет существование файла и доступность для чтения."""
     if not file_path.exists():
-        logger.error(f"Файл не существует: {file_path}")
+        logging.error(f"Файл не существует: {file_path}")
         return False
     if not file_path.is_file():
-        logger.error(f"Указанный путь не является файлом: {file_path}")
+        logging.error(f"Указанный путь не является файлом: {file_path}")
         return False
     if not os.access(file_path, os.R_OK):
-        logger.error(f"Нет прав на чтение файла: {file_path}")
+        logging.error(f"Нет прав на чтение файла: {file_path}")
         return False
     return True
 
@@ -65,7 +83,7 @@ def read_text_file(file_path: Path) -> str:
             return content
     except Exception as e:
         logger.error(f"Ошибка при чтении файла с текстом письма: {str(e)}")
-        sys.exit(EXIT_FILE_READ_ERROR)
+        raise FileReadError(f"Ошибка чтения файла {file_path}: {str(e)}")
 
 
 def add_signature(body: str, sender: Optional[str] = None) -> str:
@@ -90,11 +108,11 @@ def create_message(
         message["To"] = recipient
         message["Subject"] = subject
         message.attach(MIMEText(body, "plain", "utf-8"))
-        logger.info("Создано MIME сообщение")
+        logger.debug("MIME сообщение успешно создано")
         return message
     except Exception as e:
-        logger.error(f"Ошибка при создании сообщения: {str(e)}")
-        sys.exit(EXIT_UNKNOWN_ERROR)
+        logger.error(f"Ошибка при создании сообщения: {str(e)}", exc_info=True)
+        raise EmailSenderError(f"Ошибка создания сообщения: {str(e)}")
 
 
 def attach_files(message: MIMEMultipart, file_paths: List[Path]) -> bool:
@@ -107,7 +125,7 @@ def attach_files(message: MIMEMultipart, file_paths: List[Path]) -> bool:
                 part = MIMEApplication(f.read(), Name=filename)
                 part["Content-Disposition"] = f'attachment; filename="{filename}"'
                 message.attach(part)
-                logger.info(f"Успешно добавлено вложение: {file_path}")
+                logger.info(f"Успешно добавлено вложение: {filename}")
         except Exception as e:
             logger.error(f"Ошибка при добавлении вложения {file_path}: {str(e)}")
             success = False
@@ -122,52 +140,80 @@ def send_email(
     message: MIMEMultipart,
     use_ssl: bool,
     auth: Optional[str] = None,
-) -> None:
-    """Отправляет письмо через SMTP сервер."""
+    auth_file: Optional[argparse.FileType] = None,
+) -> int:
+    """Отправляет письмо через SMTP сервер.
+    Возвращает код ошибки или EXIT_SUCCESS при успехе."""
     smtp_server = None
     try:
-        logger.info(f"Попытка подключения к SMTP серверу {server}:{port}")
-
+        logger.info(f"Подключение к SMTP серверу {server}:{port} (SSL: {use_ssl})")
+        timeout_seconds = 5  # Таймаут в секундах
         if use_ssl:
-            smtp_server = smtplib.SMTP_SSL(server, port)
+            smtp_server = smtplib.SMTP_SSL(server, port, timeout=timeout_seconds)
         else:
-            smtp_server = smtplib.SMTP(server, port)
+            smtp_server = smtplib.SMTP(server, port, timeout=timeout_seconds)
 
-        if auth:
-            username, password = auth.split(":")
+        if auth or auth_file:
+            if auth:
+                username, password = auth.split(":")
+                logger.debug("Используется аутентификация через аргументы")
+            elif auth_file:
+                username, password = read_auth_from_file(auth_file)
+
             try:
                 smtp_server.login(username, password)
                 logger.info("Успешная аутентификация на SMTP сервере")
-            except smtplib.SMTPAuthenticationError:
-                logger.error("Ошибка аутентификации на SMTP сервере")
-                sys.exit(EXIT_SMTP_AUTH_ERROR)
+            except smtplib.SMTPAuthenticationError as e:
+                logger.error(f"Ошибка аутентификации: {str(e)}")
+                return EXIT_SMTP_AUTH_ERROR
             except Exception as e:
-                logger.error(f"Ошибка при аутентификации: {str(e)}")
-                sys.exit(EXIT_SMTP_AUTH_ERROR)
+                logger.error(f"Ошибка при аутентификации: {str(e)}", exc_info=True)
+                return EXIT_SMTP_AUTH_ERROR
 
         smtp_server.send_message(message)
-        logger.info("Письмо успешно отправлено")
-    except smtplib.SMTPConnectError:
-        logger.error("Ошибка подключения к SMTP серверу")
-        sys.exit(EXIT_SMTP_CONNECTION_ERROR)
-    except smtplib.SMTPHeloError:
-        logger.error("Ошибка приветствия SMTP сервера")
-        sys.exit(EXIT_SMTP_CONNECTION_ERROR)
-    except smtplib.SMTPDataError:
-        logger.error("Ошибка данных SMTP")
-        sys.exit(EXIT_SMTP_SEND_ERROR)
+        logger.info(f"Письмо успешно отправлено от {sender} к {recipient}")
+        return EXIT_SUCCESS
+
+    except smtplib.SMTPConnectError as e:
+        logger.error(f"Ошибка подключения к SMTP серверу: {str(e)}")
+        return EXIT_SMTP_CONNECTION_ERROR
+    except smtplib.SMTPHeloError as e:
+        logger.error(f"Ошибка приветствия SMTP сервера: {str(e)}")
+        return EXIT_SMTP_CONNECTION_ERROR
+    except smtplib.SMTPDataError as e:
+        logger.error(f"Ошибка данных SMTP: {str(e)}")
+        return EXIT_SMTP_SEND_ERROR
     except smtplib.SMTPException as e:
-        logger.error(f"Ошибка SMTP: {str(e)}")
-        sys.exit(EXIT_SMTP_SEND_ERROR)
+        logger.error(f"Ошибка SMTP: {str(e)}", exc_info=True)
+        return EXIT_SMTP_SEND_ERROR
     except Exception as e:
-        logger.error(f"Неизвестная ошибка при отправке письма: {str(e)}")
-        sys.exit(EXIT_UNKNOWN_ERROR)
+        logger.error(f"Неизвестная ошибка при отправке письма: {str(e)}", exc_info=True)
+        return EXIT_UNKNOWN_ERROR
     finally:
         if smtp_server:
             try:
                 smtp_server.quit()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Ошибка при закрытии SMTP соединения: {str(e)}")
+
+
+def read_auth_from_file(auth_file):
+    """Читает данные авторизации из файла"""
+    try:
+        data = auth_file.read().strip()
+        username, password = data.split(":")
+        logger.info("Данные аутентификации успешно прочитаны из файла")
+        return username, password
+    except ValueError:
+        logger.error(
+            "Неверный формат данных в файле авторизации. Ожидается 'username:password'."
+        )
+        raise AuthError("Неверный формат данных в файле авторизации")
+    except Exception as e:
+        logger.error(f"Ошибка при чтении файла авторизации: {str(e)}")
+        raise AuthError(f"Ошибка чтения файла авторизации: {str(e)}")
+    finally:
+        auth_file.close()
 
 
 def generate_default_email_body(
@@ -186,14 +232,10 @@ def get_email_body(args: argparse.Namespace, file_paths: List[Path]) -> str:
         try:
             body = read_text_file(args.text_file)
             return add_signature(body, args.sender)
-        except SystemExit:
-            logger.warning(
-                "Не удалось прочитать файл с текстом, используется текст из аргумента или по умолчанию"
-            )
+        except FileReadError as e:
+            logger.warning(f"Не удалось прочитать файл с текстом: {str(e)}")
         except Exception as e:
-            logger.warning(
-                f"Не удалось прочитать файл с текстом: {str(e)}, используется текст из аргумента или по умолчанию"
-            )
+            logger.warning(f"Ошибка чтения файла с текстом: {str(e)}")
 
     if args.text:
         logger.info("Используется текст из аргумента --text")
@@ -203,13 +245,41 @@ def get_email_body(args: argparse.Namespace, file_paths: List[Path]) -> str:
     return generate_default_email_body(file_paths, args.sender)
 
 
-def parse_file_paths(file_paths_str: str) -> List[Path]:
-    """Разбирает строку с путями к файлам."""
+def parse_file_paths(
+    file_paths_str: str, files_list_path: Optional[Path] = None
+) -> Tuple[List[Path], int]:
+    """Разбирает пути к файлам из строки или из файла со списком.
+    Возвращает кортеж (список файлов, код ошибки)"""
+    file_paths = []
+
+    if files_list_path:
+        if not validate_file_path(files_list_path):
+            return [], EXIT_FILE_NOT_FOUND
+
+        try:
+            with files_list_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        path = Path(line)
+                        if not validate_file_path(path):
+                            return [], EXIT_FILE_NOT_FOUND
+                        file_paths.append(path)
+            logger.info(f"Прочитано {len(file_paths)} файлов из списка")
+        except Exception as e:
+            logger.error(f"Ошибка при чтении файла со списком: {str(e)}")
+            return [], EXIT_FILE_READ_ERROR
+
+        if not file_paths:
+            logger.error("Файл со списком не содержит валидных файлов")
+            return [], EXIT_NO_FILES
+
+        return file_paths, EXIT_SUCCESS
+
     if not file_paths_str.strip():
         logger.error("Не указаны файлы для отправки")
-        sys.exit(EXIT_NO_FILES)
+        return [], EXIT_NO_FILES
 
-    file_paths = []
     for file_path in file_paths_str.split(","):
         file_path = file_path.strip()
         if not file_path:
@@ -217,50 +287,109 @@ def parse_file_paths(file_paths_str: str) -> List[Path]:
 
         path = Path(file_path)
         if not validate_file_path(path):
-            sys.exit(EXIT_FILE_NOT_FOUND)
+            return [], EXIT_FILE_NOT_FOUND
         file_paths.append(path)
 
     if not file_paths:
         logger.error("Не указаны валидные файлы для отправки")
-        sys.exit(EXIT_NO_FILES)
+        return [], EXIT_NO_FILES
 
-    return file_paths
+    logger.info(f"Подготовлено {len(file_paths)} файлов для отправки")
+    return file_paths, EXIT_SUCCESS
+
+
+def setup_logging(log_file: Optional[str] = None) -> None:
+    """Настраивает логирование."""
+    handlers = [logging.StreamHandler()]
+
+    if log_file is not None:  # Если параметр --log был передан (даже без значения)
+        try:
+            # Используем переданное имя файла или DEFAULT_LOGFILE, если имя не указано
+            log_filename = log_file if log_file != "" else DEFAULT_LOGFILE
+            handlers.append(logging.FileHandler(log_filename))
+            logger.info(f"Логирование настроено, файл логов: {log_filename}")
+        except Exception as e:
+            logger.error(f"Ошибка настройки файлового логгера: {str(e)}")
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=handlers,
+    )
 
 
 def setup_arg_parser() -> argparse.ArgumentParser:
     """Настраивает парсер аргументов командной строки."""
-    parser = argparse.ArgumentParser(
-        description="""Утилита для отправки писем с вложениями.""",
-        formatter_class=argparse.RawTextHelpFormatter,
+    return_codes_help = """
+Коды возврата:
+  {EXIT_SUCCESS} - Успешное выполнение
+  {EXIT_ARGUMENT_ERROR} - Ошибка в аргументах командной строки
+  {EXIT_FILE_NOT_FOUND} - Файл не найден
+  {EXIT_FILE_READ_ERROR} - Ошибка чтения файла
+  {EXIT_ATTACHMENT_ERROR} - Ошибка прикрепления файлов
+  {EXIT_SMTP_CONNECTION_ERROR} - Ошибка подключения к SMTP серверу
+  {EXIT_SMTP_AUTH_ERROR} - Ошибка аутентификации на SMTP сервере
+  {EXIT_SMTP_SEND_ERROR} - Ошибка отправки письма
+  {EXIT_INVALID_EMAIL} - Невалидный email адрес
+  {EXIT_NO_FILES} - Не указаны файлы для отправки
+  {EXIT_UNKNOWN_ERROR} - Неизвестная ошибка
+""".format(
+        EXIT_SUCCESS=EXIT_SUCCESS,
+        EXIT_ARGUMENT_ERROR=EXIT_ARGUMENT_ERROR,
+        EXIT_FILE_NOT_FOUND=EXIT_FILE_NOT_FOUND,
+        EXIT_FILE_READ_ERROR=EXIT_FILE_READ_ERROR,
+        EXIT_ATTACHMENT_ERROR=EXIT_ATTACHMENT_ERROR,
+        EXIT_SMTP_CONNECTION_ERROR=EXIT_SMTP_CONNECTION_ERROR,
+        EXIT_SMTP_AUTH_ERROR=EXIT_SMTP_AUTH_ERROR,
+        EXIT_SMTP_SEND_ERROR=EXIT_SMTP_SEND_ERROR,
+        EXIT_INVALID_EMAIL=EXIT_INVALID_EMAIL,
+        EXIT_NO_FILES=EXIT_NO_FILES,
+        EXIT_UNKNOWN_ERROR=EXIT_UNKNOWN_ERROR,
     )
 
-    # Обязательные параметры
+    parser = argparse.ArgumentParser(
+        description="Утилита для отправки писем с вложениями.\n\n" + return_codes_help,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # Группа для взаимно исключающих аргументов файлов
+    files_group = parser.add_mutually_exclusive_group(required=True)
+    files_group.add_argument("-a", "--files", help="Файлы для вложения (через запятую)")
+    files_group.add_argument(
+        "--files-list",
+        type=Path,
+        help="Файл со списком файлов для вложения (по одному на строку)",
+    )
+
+    # Остальные обязательные параметры
     parser.add_argument("-s", "--server", required=True, help="SMTP сервер")
     parser.add_argument(
         "-p", "--port", required=True, type=int, help="Порт SMTP сервера"
     )
     parser.add_argument("-t", "--to", required=True, help="Email получателя")
+    parser.add_argument("-f", "--from", dest="sender", nargs="?",const=ADMIN_MAIL help="Email отправителя")
     parser.add_argument(
-        "-a", "--files", required=True, help="Файлы для вложения (через запятую)"
+        "-j", "--subject", default="Письмо с вложениями", help="Тема письма"
     )
-
-    # Необязательные параметры
-    parser.add_argument("-f", "--from", dest="sender", help="Email отправителя")
+    parser.add_argument("-b", "--text", help="Текст письма")
+    parser.add_argument("-bf", "--text-file", type=Path, help="Файл с текстом письма")
     parser.add_argument(
-        "-j", "--subject", default="Вам отправлен файл(ы)", help="Тема письма"
+        "-uf",
+        "--auth-file",
+        type=argparse.FileType("r"),
+        help="Файл с данными аутентификации (логин:пароль)",
     )
     parser.add_argument(
-        "-x", "--text", help="Текст письма (не использовать с --text-file)"
+        "-u", "--auth", help="Данные аутентификации в формате логин:пароль"
     )
+    parser.add_argument("-S", "--ssl", action="store_true", help="Использовать SSL")
     parser.add_argument(
-        "-F",
-        "--text-file",
-        type=Path,
-        help="Файл с текстом письма (не использовать с --text)",
+        "-l",
+        "--log",
+        nargs="?",  # делает аргумент необязательным, но позволяет указать значение
+        const=DEFAULT_LOGFILE,  # значение по умолчанию, если параметр указан без значения
+        help=f"Файл для сохранения логов (по умолчанию: {DEFAULT_LOGFILE})",
     )
-    parser.add_argument("-u", "--auth", help="Логин и пароль (user:pass)")
-    parser.add_argument("-S", "--ssl", action="store_true", help="Использовать SSL/TLS")
-
     return parser
 
 
@@ -270,12 +399,26 @@ def main() -> int:
         parser = setup_arg_parser()
         args = parser.parse_args()
 
+        # Настройка логирования (делаем это в первую очередь)
+        setup_logging(args.log)
+
+        logger.info("Запуск скрипта отправки email")
+        logger.debug(f"Аргументы командной строки: {args}")
+
+        # Проверка конфликтующих аргументов
         if args.text and args.text_file:
             logger.error(
                 "Ошибка: нельзя использовать одновременно --text и --text-file"
             )
             return EXIT_ARGUMENT_ERROR
 
+        if args.auth and args.auth_file:
+            logger.error(
+                "Ошибка: нельзя использовать одновременно --auth и --auth-file"
+            )
+            return EXIT_ARGUMENT_ERROR
+
+        # Валидация email
         if args.sender and not validate_email(args.sender):
             logger.error(f"Невалидный email отправителя: {args.sender}")
             return EXIT_INVALID_EMAIL
@@ -284,26 +427,55 @@ def main() -> int:
             logger.error(f"Невалидный email получателя: {args.to}")
             return EXIT_INVALID_EMAIL
 
-        file_paths = parse_file_paths(args.files)
-        body = get_email_body(args, file_paths)
-        message = create_message(args.sender or ADMIN_MAIL, args.to, args.subject, body)
+        # Получение списка файлов
+        file_paths, error_code = parse_file_paths(
+            args.files if hasattr(args, "files") else "",
+            args.files_list if hasattr(args, "files_list") else None,
+        )
+        if error_code != EXIT_SUCCESS:
+            return error_code
 
+        # Подготовка текста письма
+        try:
+            body = get_email_body(args, file_paths)
+            message = create_message(
+                args.sender or ADMIN_MAIL, args.to, args.subject, body
+            )
+        except EmailSenderError as e:
+            logger.error(f"Ошибка подготовки письма: {str(e)}")
+            return EXIT_UNKNOWN_ERROR
+
+        # Добавление вложений
         if not attach_files(message, file_paths):
+            logger.error("Ошибка при добавлении одного или нескольких вложений")
             return EXIT_ATTACHMENT_ERROR
 
-        send_email(
-            args.server,
-            args.port,
-            args.sender or ADMIN_MAIL,
-            args.to,
-            message,
-            args.ssl,
-            args.auth,
-        )
+        # Отправка письма
+        try:
+            error_code = send_email(
+                args.server,
+                args.port,
+                args.sender or ADMIN_MAIL,
+                args.to,
+                message,
+                args.ssl,
+                auth=args.auth,
+                auth_file=args.auth_file,
+            )
+            if error_code != EXIT_SUCCESS:
+                return error_code
+        except AuthError as e:
+            logger.error(f"Ошибка аутентификации: {str(e)}")
+            return EXIT_SMTP_AUTH_ERROR
+        except Exception as e:
+            logger.error(f"Неизвестная ошибка при отправке: {str(e)}")
+            return EXIT_UNKNOWN_ERROR
+
+        logger.info("Скрипт успешно завершил работу")
         return EXIT_SUCCESS
 
     except Exception as e:
-        logger.error(f"Критическая ошибка: {str(e)}")
+        logger.critical(f"Критическая ошибка: {str(e)}", exc_info=True)
         return EXIT_UNKNOWN_ERROR
 
 
