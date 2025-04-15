@@ -4,7 +4,7 @@
 ![Windows](https://img.shields.io/badge/Windows-0078D6?logo=windows&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
 
-Утилита `send2mail` предназначена для отправки электронных писем с вложениями через SMTP сервер. Поддерживает аутентификацию, SSL, гибкую настройку текста письма и логирование.
+Утилита `send2mail.py` предназначена для отправки электронных писем с вложениями через SMTP сервер. Поддерживает аутентификацию, SSL, гибкую настройку текста письма и логирование.
 
 ## Возможности
 
