@@ -1,6 +1,8 @@
-# send2mail - Утилита для отправки писем с вложениями
+# Send2Mail - Консольная утилита для отправки писем с вложениями.
 
-![Python 3.6+](https://img.shields.io/badge/python-3.6%2B-blue?logo=python) ![Windows](https://img.shields.io/badge/Windows-0078D6?logo=windows&logoColor=white) ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
+![Python 3.6+](https://img.shields.io/badge/python-3.6%2B-blue?logo=python)
+![Windows](https://img.shields.io/badge/Windows-0078D6?logo=windows&logoColor=white)
+![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
 
 Утилита `send2mail` предназначена для отправки электронных писем с вложениями через SMTP сервер. Поддерживает аутентификацию, SSL, гибкую настройку текста письма и логирование.
 
