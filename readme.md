@@ -42,6 +42,7 @@
    ```bash
    python --version
    ```
+   в Linux, возможно вместо `python` нужно набирать `python3`
 
 ## Использование
 
