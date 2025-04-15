@@ -1,5 +1,7 @@
 # send2mail - Утилита для отправки писем с вложениями
 
+![Python 3.6+](https://img.shields.io/badge/python-3.6%2B-blue?logo=python) ![Windows](https://img.shields.io/badge/Windows-0078D6?logo=windows&logoColor=white) ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
+
 Утилита `send2mail` предназначена для отправки электронных писем с вложениями через SMTP сервер. Поддерживает аутентификацию, SSL, гибкую настройку текста письма и логирование.
 
 ## Возможности
@@ -157,6 +159,8 @@ python send2mail.py ... --log custom.log  # сохранит логи в custom.
 
 Этот проект распространяется под лицензией MIT. См. файл [LICENSE](LICENSE.md) для получения дополнительной информации.
 
-## Поддержка
+## Поддержка и контакты
 
 Если у вас возникли вопросы или проблемы, создайте issue в репозитории проекта.
+Или обращайтесь к автору [redx@mail.ru](mailto:redx@mail.ru)
+
