@@ -13,18 +13,17 @@
 - Логирование операций
 """
 
-import sys
-import os
 import argparse
-import smtplib
 import logging
+import os
+import re
+import smtplib
+import sys
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
 from pathlib import Path
-import re
 from typing import Optional, List, Tuple
-
 
 # Константы
 ADMIN_MAIL = "noreply@example.com"  # Адрес отправителя по умолчанию
@@ -76,7 +75,6 @@ logger = logging.getLogger()
 def validate_email(email: str) -> bool:
     """
     Проверяет валидность email адреса с помощью регулярного выражения.
-
     Args:
         email (str): Email адрес для проверки
 
@@ -360,7 +358,7 @@ def generate_default_email_body(
         str: Сгенерированный текст письма с подписью
     """
     body = "Вам отправлены файлы:\n" + "\n".join(
-        f"{i+1}. {f.name}" for i, f in enumerate(file_paths)
+        f"{i + 1}. {f.name}" for i, f in enumerate(file_paths)
     )
     return add_signature(body, sender)
 
